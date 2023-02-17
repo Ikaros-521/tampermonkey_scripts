@@ -1,12 +1,15 @@
 // ==UserScript==
 // @name         b站大锦鲤 动态转发抽奖 脚本
 // @namespace    http://tampermonkey.net/
-// @version      7.1
+// @version      8.7
 // @description  在大锦鲤的动态页：https://space.bilibili.com/226257459/dynamic，找到转发抽奖的专栏，使用左上角的弹出窗点运行 即可（用完记得关闭插件）【兼容 糯米是个背包 的专栏：https://space.bilibili.com/492426375/dynamic】
 // @author       Ikaros
 // @match        https://www.bilibili.com/read/cv*
 // @match        https://t.bilibili.com/*
 // @match        https://message.bilibili.com/*
+// @match        https://space.bilibili.com/*
+// @match        https://www.bilibili.com/opus/*
+// @match        https://www.bilibili.com/404
 // @grant        unsafeWindow
 // @grant        GM_openInTab
 // @grant        GM_getValue
@@ -37,6 +40,10 @@
     let interval_time = 30
     // 定时运行定时器
     let interval_run = null
+    // 存储打开过的调用API接口的动态id
+    let api_dynamic_id_json = {"dynamic_id": []}
+    // 清空已经存储的动态id
+    // GM_setValue("api_dynamic_id_json", JSON.stringify(api_dynamic_id_json))
 
     // 生成弹窗div
     function init_alert_div() {
@@ -45,7 +52,7 @@
         var alert_content_span = document.createElement("span");
 
         alert_div.id = "alert_div";
-        alert_div.style.zIndex = "10000";
+        alert_div.style.zIndex = "66666";
         alert_div.style.top = "1%";
         alert_div.style.left = "40%";
         alert_div.style.width = "300px";
@@ -74,6 +81,15 @@
                 "alert_div_checkbox": true
             };
         }
+
+        try {
+            api_dynamic_id_json = JSON.parse(GM_getValue("api_dynamic_id_json"));
+        } catch {
+            api_dynamic_id_json = {
+                "dynamic_id": []
+            };
+            GM_setValue("api_dynamic_id_json", JSON.stringify(api_dynamic_id_json))
+        }
         
         // 获取启用状态
         if(true != data_json["alert_div_checkbox"]) return;
@@ -99,8 +115,92 @@
         return "_" + date.toString().slice(0, 10) + "_" + date.toString().slice(-3) + random_num(9).toString()
     }
 
+    // 传入动态链接，返回动态id
+    function dynamic_url_to_id(url) {
+        console.log("url=" + url)
+
+        var matches = url.match(/\d+/g);
+        if (matches) {
+            return matches[0];
+        } else {
+            return null;
+        }
+    }
+
+    // 新动态链接转老动态链接
+    function new_dynamic_url_to_old(url) {
+        let id = dynamic_url_to_id(url)
+        if(id == null) return null
+        return "https://t.bilibili.com/" + id.toString()
+    }
+
+    // 判断动态是否已经点赞过
+    async function already_like(url) {
+        var dynamic_url = url;
+        return new Promise((resolve, reject) => {
+            var dynamic_id = dynamic_url_to_id(dynamic_url);
+
+            // 构建url
+            var url = "https://api.bilibili.com/x/polymer/web-dynamic/v1/detail?timezone_offset=-480&id=" + dynamic_id
+            // 建立所需的对象
+            var httpRequest = new XMLHttpRequest();
+            // 打开连接  将请求参数写在url中 
+            httpRequest.open('GET', url, true);
+            httpRequest.withCredentials = true;
+            // 发送请求  将请求参数写在URL中
+            httpRequest.send();
+            httpRequest.onerror = function(error) { 
+                console.log("请求动态详情接口出错！" + error); 
+                show_alert("请求动态详情接口出错！" + error);
+            };
+            httpRequest.ontimeout = function() { 
+                console.log("请求动态详情接口超时！"); 
+                show_alert("请求动态详情接口超时！"); 
+            };
+            // 获取数据后的处理程序
+            httpRequest.onreadystatechange = function () {
+                if (httpRequest.readyState == 4 && httpRequest.status == 200) {
+                    // 获取到json字符串
+                    var ret = httpRequest.responseText;
+                    //console.log(ret);
+                    // 转为JSON对象
+                    var json = JSON.parse(ret);
+                    console.log(json);
+
+                    try {
+                        if(json["code"] == 0) {
+                            var status = json["data"]["item"]["modules"]["module_stat"]["like"]["status"]
+                            
+                            if(status) {
+                                console.log("动态 " + dynamic_id + " 已点赞")
+                                show_alert("动态 " + dynamic_id + " 已点赞")
+                            } else {
+                                console.log("动态 " + dynamic_id + " 未点赞")
+                            }
+                            
+                            
+                            resolve(status);
+                        } else {
+                            console.log("获取动态 " + dynamic_id + " 点赞情况 失败")
+                            show_alert("获取动态 " + dynamic_id + " 点赞情况 失败")
+
+                            resolve(false);
+                        }
+                    } catch {
+                        console.log("获取动态 " + dynamic_id + " 点赞情况 失败")
+                        show_alert("获取动态 " + dynamic_id + " 点赞情况 失败")
+
+                        resolve(false);
+                    }
+                }
+            };
+        });
+    }
+
     // 在页面左侧插入一个配置使用框
     function init_config_div() {
+        console.log("生成配置使用框")
+
         var body = document.getElementsByTagName("body")[0];
         var br1 = document.createElement("br");
         var br2 = document.createElement("br");
@@ -114,6 +214,8 @@
         var br10 = document.createElement("br");
         var br11 = document.createElement("br");
         var br12 = document.createElement("br");
+        var br13 = document.createElement("br");
+        var br14 = document.createElement("br");
         var div = document.createElement("div");
         var show_hide_div = document.createElement("div");
         var search_div = document.createElement("div");
@@ -164,11 +266,12 @@
         var link_textarea = document.createElement("textarea");
         var start_run4 = document.createElement("button");
 
+        div.setAttribute("id", "main_div");
         div.style.position = "fixed";
         div.style.top = "10%";
         div.style.width = "320px";
         div.style.left = "10px";
-        div.style.zIndex = "6666";
+        div.style.zIndex = "66666";
         div.style.background = "#f4f5f7b0";
         show_hide_div.style.width = "120px";
         show_hide_div.style.fontSize = "18px";
@@ -183,11 +286,12 @@
         search_div.style.color = "#000000";
         search_div.style.marginLeft = "5px";
 
+        var a_arr = [];
         // 是否在专栏页面
         if(window.location.href.startsWith("https://www.bilibili.com/read/cv")) {
-            var a_arr = document.getElementById("article-content").getElementsByTagName("a")
+            a_arr = document.getElementById("article-content").getElementsByTagName("a")
         } else if(window.location.href.startsWith("https://message.bilibili.com/")) {
-            var a_arr = document.getElementsByClassName("dynamic-link")
+            a_arr = document.getElementsByClassName("dynamic-link")
         }
         
         link_num_span.innerText = "检索到的动态总量：" + a_arr.length;
@@ -252,14 +356,14 @@
         append_time_input.style.width = "165px";
         append_time_input.style.background = "white";
         append_time_input.setAttribute("placeholder", "默认追加延时是0毫秒");
-        interval_span.innerText = "调用接口的循环周期(秒)";
-        interval_span.title = "每隔这个周期，会请求接口然后去进行转发操作";
-        interval_span.style.display = "none"
+        interval_span.innerText = "调用接口的循环周期(分)";
+        interval_span.title = "每隔这个周期，会请求话题接口获取最新动态然后去进行转发操作";
+        // interval_span.style.display = "none"
         interval_input.setAttribute("id", "interval");
         interval_input.value = 30;
         interval_input.style.margin = "10px";
-        interval_input.style.width = "145px";
-        interval_input.style.display = "none"
+        interval_input.style.width = "140px";
+        // interval_input.style.display = "none"
         interval_input.style.background = "white";
         interval_input.setAttribute("placeholder", "默认每30分钟运行一次");
 
@@ -294,13 +398,13 @@
         start_run.style.margin = "5px 10px";
         start_run.style.cursor = "pointer";
         start_run.onclick = function(){ go(0); };
-        start_run2.innerText = "调话题接口";
+        start_run2.innerText = "调话题接口运行";
         start_run2.title = "保存配置，并开始循环调接口查找新话题动态页面并进行自动转发";
         start_run2.style.background = "#61d0ff";
         start_run2.style.border = "1px solid";
         start_run2.style.borderRadius = "3px";
         start_run2.style.fontSize = "18px";
-        start_run2.style.width = "100px";
+        start_run2.style.width = "200px";
         start_run2.style.margin = "5px 10px";
         start_run2.style.cursor = "pointer";
         start_run2.onclick = function(){ go2(); };
@@ -379,51 +483,65 @@
         } catch {
             data_json = {}
         }
+
+        try {
+            api_dynamic_id_json = JSON.parse(GM_getValue("api_dynamic_id_json"));
+        } catch {
+            api_dynamic_id_json = {"dynamic_id": []}
+            GM_setValue("api_dynamic_id_json", JSON.stringify(api_dynamic_id_json))
+        }
         // 初始化复选框选中状态
         if(data_json.hasOwnProperty("alert_div_checkbox")) {
-            alert_div_checkbox.checked = data_json["alert_div_checkbox"]
+            if(alert_div_checkbox.checked == null) alert_div_checkbox.checked = true
+            else alert_div_checkbox.checked = data_json["alert_div_checkbox"]
         } else {
             alert_div_checkbox.checked = true
             data_json["alert_div_checkbox"] = true
         }
 
         if(data_json.hasOwnProperty("use_api_checkbox")) {
-            use_api_checkbox.checked = data_json["use_api_checkbox"]
+            if(use_api_checkbox.checked == null) use_api_checkbox.checked = false
+            else use_api_checkbox.checked = data_json["use_api_checkbox"]
         } else {
             use_api_checkbox.checked = false
             data_json["use_api_checkbox"] = false
         }
 
         if(data_json.hasOwnProperty("order_checkbox")) {
-            order_checkbox.checked = data_json["order_checkbox"]
+            if(order_checkbox.checked == null) order_checkbox.checked = false
+            else order_checkbox.checked = data_json["order_checkbox"]
         } else {
             order_checkbox.checked = false
             data_json["order_checkbox"] = false
         }
         
         if(data_json.hasOwnProperty("unfollow_checkbox")) {
-            unfollow_checkbox.checked = data_json["unfollow_checkbox"]
+            if(unfollow_checkbox.checked == null) unfollow_checkbox.checked = false
+            else unfollow_checkbox.checked = data_json["unfollow_checkbox"]
         } else {
             unfollow_checkbox.checked = false
             data_json["unfollow_checkbox"] = false
         }
 
         if(data_json.hasOwnProperty("start_num")) {
-            start_num_input.value = data_json["start_num"]
+            if(data_json["start_num"] == null) start_num_input.value = 1
+            else start_num_input.value = data_json["start_num"]
         } else {
             start_num_input.value = 1
             data_json["start_num"] = 1
         }
 
         if(data_json.hasOwnProperty("end_num")) {
-            end_num_input.value = data_json["end_num"]
+            if(data_json["end_num"] == null) end_num_input.value = 999
+            else end_num_input.value = data_json["end_num"]
         } else {
             end_num_input.value = 999
             data_json["end_num"] = 999
         }
         
         if(data_json.hasOwnProperty("open_time")) {
-            open_time_input.value = data_json["open_time"]
+            if(data_json["open_time"] == null) open_time.value = 120
+            else open_time_input.value = data_json["open_time"]
         } else {
             open_time_input.value = 120
             data_json["open_time"] = 120
@@ -441,22 +559,31 @@
             data_json["forward_comment_content"] = ""
         }
         if(data_json.hasOwnProperty("common_append_time")) {
-            append_time_input.value = data_json["common_append_time"]
+            if(data_json["append_time_input"] == null) append_time_input.value = 0
+            else append_time_input.value = data_json["common_append_time"]
         } else {
             append_time_input.value = 0
             data_json["common_append_time"] = 0
         }
         if(data_json.hasOwnProperty("operation_interval")) {
-            operation_interval_input.value = data_json["operation_interval"]
+            if(data_json["operation_interval_input"] == null) interval_input.value = 3000
+            else operation_interval_input.value = data_json["operation_interval"]
         } else {
             operation_interval_input.value = 3000
             data_json["operation_interval"] = 3000
         }
-        if(data_json.hasOwnProperty("operation_interval")) {
-            interval_input.value = data_json["interval_time"]
+        if(data_json.hasOwnProperty("interval_time")) {
+            if(data_json["interval_time"] == null) interval_input.value = 30
+            else interval_input.value = data_json["interval_time"]
         } else {
             interval_input.value = 30
             data_json["interval_time"] = 30
+        }
+
+        if(data_json.hasOwnProperty("follow_tagid")) {
+            if(data_json["follow_tagid"] == null) data_json["follow_tagid"] = 0
+        } else {
+            data_json["follow_tagid"] = 0
         }
 
         GM_setValue("data_json", JSON.stringify(data_json))
@@ -481,14 +608,15 @@
         search_div.appendChild(forward_comment_span);
         search_div.appendChild(forward_comment_input);
         search_div.appendChild(br4);
-        search_div.appendChild(interval_span);
-        search_div.appendChild(interval_input);
         search_div.appendChild(operation_interval_span);
         search_div.appendChild(operation_interval_input);
         search_div.appendChild(br8);
         search_div.appendChild(append_time_span);
         search_div.appendChild(append_time_input);
         search_div.appendChild(br5);
+        search_div.appendChild(interval_span);
+        search_div.appendChild(interval_input);
+        search_div.appendChild(br14);
         search_div.appendChild(alert_div_checkbox);
         search_div.appendChild(alert_div_label);
         search_div.appendChild(use_api_checkbox);
@@ -499,7 +627,6 @@
         search_div.appendChild(unfollow_label);
         search_div.appendChild(br6);
         search_div.appendChild(start_run);
-        // search_div.appendChild(start_run2);
         search_div.appendChild(set_btn);
         search_div.appendChild(br7);
         search_div.appendChild(color_btn);
@@ -509,8 +636,13 @@
         search_div.appendChild(br12);
         search_div.appendChild(link_textarea);
         search_div.appendChild(start_run4);
+        search_div.appendChild(br13);
+        search_div.appendChild(start_run2);
 
         body.appendChild(div);
+
+        // 创建关注分组
+        create_follow_group("抽奖");
     }
 
     // 仅保存配置 用于手动测试 传入运行的类型
@@ -522,22 +654,36 @@
             console.log(error)
         }
 
+        var a_arr = [];
         // 是否在专栏页面
         if(window.location.href.startsWith("https://www.bilibili.com/read/cv")) {
-            var a_arr = document.getElementById("article-content").getElementsByTagName("a")
+            a_arr = document.getElementById("article-content").getElementsByTagName("a")
         } else if(window.location.href.startsWith("https://message.bilibili.com/")) {
-            var a_arr = document.getElementsByClassName("dynamic-link")
+            a_arr = document.getElementsByClassName("dynamic-link")
         }
         document.getElementById("link_num").innerText = "检索到的动态总量：" + a_arr.length;
 
-        var comment_content = document.getElementById("comment").value
-        var forward_comment_content = document.getElementById("forward_comment").value
-        var common_append_time = parseInt(document.getElementById("common_append_time").value)
-        var operation_interval = parseInt(document.getElementById("operation_interval").value)
-        start_num = parseInt(document.getElementById("start_num").value)
-        end_num = parseInt(document.getElementById("end_num").value)
-        open_time = parseInt(document.getElementById("open_time").value)
-        interval_time = parseInt(document.getElementById("interval").value)
+        // 空值自动补充默认值
+        document.getElementById("comment").value = document.getElementById("comment").value ? document.getElementById("comment").value : ""
+        document.getElementById("forward_comment").value = document.getElementById("forward_comment").value ? document.getElementById("forward_comment").value : ""
+        document.getElementById("common_append_time").value = document.getElementById("common_append_time").value != "" ? parseInt(document.getElementById("common_append_time").value) : 0
+        document.getElementById("operation_interval").value = document.getElementById("operation_interval").value != "" ? parseInt(document.getElementById("operation_interval").value) : 3000
+        document.getElementById("start_num").value = document.getElementById("start_num").value != "" ? parseInt(document.getElementById("start_num").value) : 1
+        document.getElementById("end_num").value = document.getElementById("end_num").value != "" ? parseInt(document.getElementById("end_num").value) : 999
+        document.getElementById("open_time").value = document.getElementById("open_time").value != "" ? parseInt(document.getElementById("open_time").value) : 120
+        document.getElementById("interval").value = document.getElementById("interval").value != "" ? parseInt(document.getElementById("interval").value) : 30
+
+        var comment_content = document.getElementById("comment").value != "" ? document.getElementById("comment").value : ""
+        var forward_comment_content = document.getElementById("forward_comment").value != "" ? document.getElementById("forward_comment").value : ""
+        var common_append_time = document.getElementById("common_append_time").value != "" ? parseInt(document.getElementById("common_append_time").value) : 0
+        var operation_interval = document.getElementById("operation_interval").value != "" ? parseInt(document.getElementById("operation_interval").value) : 3000
+        start_num = document.getElementById("start_num").value != "" ? parseInt(document.getElementById("start_num").value) : 1
+        end_num = document.getElementById("end_num").value != "" ? parseInt(document.getElementById("end_num").value) : 999
+        open_time = document.getElementById("open_time").value != "" ? parseInt(document.getElementById("open_time").value) : 120
+        interval_time = document.getElementById("interval").value != "" ? parseInt(document.getElementById("interval").value) : 30
+
+        // 获取下 配置数据
+        var temp_data_json = JSON.parse(GM_getValue("data_json"));
 
         var data_json = {
             "comment_content": comment_content,
@@ -552,6 +698,7 @@
             "use_api_checkbox": document.getElementById("use_api_checkbox").checked,
             "order_checkbox": document.getElementById("order_checkbox").checked,
             "unfollow_checkbox": document.getElementById("unfollow_checkbox").checked,
+            "follow_tagid": temp_data_json["follow_tagid"]
         }
 
         GM_setValue("data_json", JSON.stringify(data_json))
@@ -564,6 +711,56 @@
         }
 
         show_alert("配置保存成功喵~")
+
+        // 取关模式 勾选
+        if(document.getElementById("unfollow_checkbox").checked == true) {
+            // 关注页面
+            if(window.location.href.startsWith("https://space.bilibili.com/") && window.location.href.indexOf("/fans/follow") != -1) {
+                function unfollow2() {
+                    var list_num = document.getElementsByClassName("be-dropdown fans-action-btn fans-action-follow").length;
+                    for(let i = 0; i < list_num; i++) {
+                        setTimeout(function(){
+                            // 点击取关
+                            document.getElementsByClassName("be-dropdown fans-action-btn fans-action-follow")[0].getElementsByClassName("be-dropdown-item")[1].click()
+                        }, i * 1000 + random_num(250));
+                    }
+                    
+                    setTimeout(function(){
+                        if(list_num != 20) {
+                            console.log("取关完毕");
+                            show_alert("取关完毕");
+                            return;
+                        } else {
+                            console.log("切换页面");
+                            show_alert("切换页面");
+                            if(document.getElementsByClassName("be-pager-prev")[0]) {
+                                if(document.getElementsByClassName("be-pager-prev be-pager-disabled")[0] == null) {
+                                    document.getElementsByClassName("be-pager-prev")[0].click();
+                                } else {
+                                    if(document.getElementsByClassName("be-pager-next")[0]) {
+                                        if(document.getElementsByClassName("be-pager-next be-pager-disabled")[0] == null) {
+                                            document.getElementsByClassName("be-pager-next")[0].click();
+                                        } else {
+                                            console.log("取关完毕");
+                                            show_alert("取关完毕");
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            setTimeout(function(){ unfollow2();}, 3000 + random_num(250));
+                        }
+                    }, (list_num + 3) * 1000 + random_num(250))
+                }
+                
+                let res = confirm('确定在此页面开始取关操作吗？');
+                if(res == true) {
+                    console.log("开始取关");
+                    show_alert("开始取关");
+                    unfollow2();
+                }
+            }
+        }
     }
 
     // 显示隐藏配置使用框
@@ -594,9 +791,9 @@
         } else if(window.location.href.startsWith("https://message.bilibili.com/")) {
             var a_arr = document.getElementsByClassName("dynamic-link")
 
-            for(var i = (a_arr.length - 1); i >= 0; i--) {
+            for(var i = 0; i < a_arr.length; i++) {
                 // 索引范围外的 设为白色背景
-                if(i < start_num || i > end_num) {
+                if(i > (a_arr.length - 1 - start_num) || i < (a_arr.length - 1 - end_num)) {
                     a_arr[i].style.background = "white"
                     a_arr[i].style.color = "black"
                 } else {
@@ -625,6 +822,8 @@
                 var index = ori_data_arr[i].indexOf("https://");
                 if(index == -1) continue;
                 let link = ori_data_arr[i].substring(index);
+                // 转老动态
+                link = new_dynamic_url_to_old(link);
 
                 setTimeout(function() {
                     console.log("i:" + i + " 跳转：" + link)
@@ -666,102 +865,315 @@
             }
         }
 
-        // 遍历
-        for(let i = start_num; i < a_arr.length; i++) {
-            // 到达结束下标+1时，截断
-            if(i > end_num) break;
-            setTimeout(function() {
-                console.log("i:" + i + " 跳转：" + a_arr[i].href)
-                show_alert("i:" + i + " 跳转：" + a_arr[i].href)
-                // window.open(a_arr[i].getAttribute("href"))
-                // active:true，新标签页获取页面焦点
-                // setParent :true:新标签页面关闭后，焦点重新回到源页面
-                GM_openInTab(a_arr[i].href, { active: false, setParent :true});
-            }, open_time * 1000 * (i - start_num))
+        // 没有点赞过的链接
+        var unliked_url = [];
+        // 是否提前过滤已点赞链接
+        var filter_like = true;
+
+        // 是否在专栏页面
+        if(window.location.href.startsWith("https://www.bilibili.com/read/cv")) {
+            if(filter_like) {
+                console.log("准备开始继续点赞过滤喵~大约需要0.5 * 选择数 秒，请耐心等待~")
+                show_alert("准备开始继续点赞过滤喵~大约需要0.5 * 选择数 秒，请耐心等待~")
+
+                async function get_unliked_url() {
+                    for(let i = start_num; i < a_arr.length; i++) {
+                        // 到达结束下标+1时，截断
+                        if(i > end_num) break;
+                        console.log(a_arr[i].href)
+                        let alreadyLiked = await already_like(a_arr[i].href);
+                        if(alreadyLiked == null) continue;
+                        if (!alreadyLiked) {
+                            unliked_url.push(a_arr[i].href);
+                            // console.log("没有点赞 插入url=" + a_arr[i].href)
+                        }
+                        // 等待0.5秒
+                        await new Promise((resolve) => setTimeout(resolve, 500));
+                    }
+                }
+                
+                get_unliked_url().then(function(result) {
+                    console.log("没有点赞过的链接总数：" + unliked_url.length)
+
+                    for(let i = 0; i < unliked_url.length; i++) {
+                        setTimeout(function() {
+                            console.log("i:" + i + " 跳转：" + new_dynamic_url_to_old(unliked_url[i]))
+                            show_alert("i:" + i + " 跳转：" + new_dynamic_url_to_old(unliked_url[i]))
+                            // window.open(new_dynamic_url_to_old(unliked_url[i]).getAttribute("href"))
+                            // active:true，新标签页获取页面焦点
+                            // setParent :true:新标签页面关闭后，焦点重新回到源页面
+                            GM_openInTab(new_dynamic_url_to_old(unliked_url[i]), { active: false, setParent :true});
+                        }, open_time * 1000 * i)
+                    }
+                });
+            } else {
+                for(let i = start_num; i < a_arr.length; i++) {
+                    // 到达结束下标+1时，截断
+                    if(i > end_num) break;
+                    setTimeout(function() {
+                        console.log("i:" + i + " 跳转：" + new_dynamic_url_to_old(a_arr[i].href))
+                        show_alert("i:" + i + " 跳转：" + new_dynamic_url_to_old(a_arr[i].href))
+
+                        GM_openInTab(new_dynamic_url_to_old(a_arr[i].href), { active: false, setParent :true});
+                    }, open_time * 1000 * (i - start_num))
+                }
+            }
+        }
+        // 消息页面
+        else if(window.location.href.startsWith("https://message.bilibili.com/")) {
+            if(filter_like) {
+                async function get_unliked_url() {
+                    for(let i = (a_arr.length - 1); i >= 0; i--) {
+                        // 索引范围外的 设为白色背景
+                        if(i <= (a_arr.length - 1 - start_num) && i >= (a_arr.length - 1 - end_num)) {
+                            console.log(a_arr[i].href)
+                            let alreadyLiked = await already_like(a_arr[i].href);
+                            if(alreadyLiked == null) continue;
+                            if (!alreadyLiked) {
+                                unliked_url.push(a_arr[i].href);
+                                // console.log("没有点赞 插入url=" + a_arr[i].href)
+                            }
+                            // 等待1秒
+                            await new Promise((resolve) => setTimeout(resolve, 1000));
+                        }
+                    }
+                }
+                
+                get_unliked_url().then(function(result) {
+                    console.log("没有点赞过的链接总数：" + unliked_url.length)
+
+                    for(let i = 0; i < unliked_url.length; i++) {
+                        setTimeout(function() {
+                            console.log("i:" + i + " 跳转：" + new_dynamic_url_to_old(unliked_url[i]))
+                            show_alert("i:" + i + " 跳转：" + new_dynamic_url_to_old(unliked_url[i]))
+                            // window.open(unliked_url[i].getAttribute("href"))
+                            // active:true，新标签页获取页面焦点
+                            // setParent :true:新标签页面关闭后，焦点重新回到源页面
+                            GM_openInTab(new_dynamic_url_to_old(unliked_url[i]), { active: false, setParent :true});
+                        }, open_time * 1000 * i)
+                    }
+                });
+            } else {
+                for(let i = (a_arr.length - 1); i >= 0; i--) {
+                    // 索引范围外的 设为白色背景
+                    if(i <= (a_arr.length - 1 - start_num) && i >= (a_arr.length - 1 - end_num)) {
+                        setTimeout(function() {
+                            console.log("i:" + i + " 跳转：" + new_dynamic_url_to_old(a_arr[i].href))
+                            show_alert("i:" + i + " 跳转：" + new_dynamic_url_to_old(a_arr[i].href))
+                            // window.open(a_arr[i].getAttribute("href"))
+                            // active:true，新标签页获取页面焦点
+                            // setParent :true:新标签页面关闭后，焦点重新回到源页面
+                            GM_openInTab(new_dynamic_url_to_old(a_arr[i].href), { active: false, setParent :true});
+                        }, open_time * 1000 * (a_arr.length - 1 - i))
+                    }
+                }
+            }
         }
     }
 
-    // 是否在专栏页面
-    if(window.location.href.startsWith("https://www.bilibili.com/read/cv")) {
-        // 删除无用内容
-        function remove_useless() {
-            document.getElementById("bili-header-container").remove()
-            document.getElementsByClassName("article-breadcrumb")[0].remove()
-            document.getElementById("readRecommendInfo").remove()
-            document.getElementById("comment-wrapper").remove()
-            document.getElementsByClassName("interaction-info")[0].remove()
-            show_alert("删除无用内容完毕~")
-        }
-        
-        // 在页面左侧插入一个配置使用框
-        init_config_div()
+    // 调接口获取动态
+    function go2() {
+        // 设置配置项
+        set_config(0)
 
-        // 调用话题接口(转发动态 话题) 并 打开页面
-        function get_dynamic_and_open(topic_id) {
-            // 构建url
-            var url = "https://api.vc.bilibili.com/topic_svr/v1/topic_svr/topic_new?topic_id=" + topic_id
-            // 建立所需的对象
-            var httpRequest = new XMLHttpRequest();
-            // 打开连接  将请求参数写在url中 
-            httpRequest.open('GET', url, true);
-            // 发送请求  将请求参数写在URL中
-            httpRequest.send();
-            httpRequest.onerror = function(error) { 
-                console.log("请求话题接口出错！" + error);
-                show_alert("请求话题接口出错！" + error);
-            };
-            httpRequest.ontimeout = function() { 
-                console.log("请求话题接口超时！"); 
-                show_alert("请求话题接口超时！");
-            };
-            // 获取数据后的处理程序
-            httpRequest.onreadystatechange = function () {
-                if (httpRequest.readyState == 4 && httpRequest.status == 200) {
-                    // 获取到json字符串
-                    var ret = httpRequest.responseText;
-                    //console.log(ret);
-                    // 转为JSON对象
-                    var json = JSON.parse(ret);
-                    console.log(json);
+        console.log("开始进行调接口获取动态喵~");
+        show_alert("开始进行调接口获取动态喵~");
+        // 先运行一次
+        get_dynamic_and_open("互动抽奖")
+        // 默认每30分钟执行一次
+        interval1 = setInterval(function(){get_dynamic_and_open("互动抽奖")}, interval_time * 60 * 1000)
+    }
 
-                    try {
-                        if(json["code"] == 0) {
-                            data_len = json["data"]["cards"].length
-                            // 遍历数据
-                            for(let i = 0; i < data_len; i++) {
-                                setTimeout(function(){
-                                    var url = "https://t.bilibili.com/" + json["data"]["cards"][i]["desc"]["dynamic_id_str"]
-                                    console.log("i:" + i + " 跳转：" + url)
-                                    // window.open(url)
-                                    // active:true，新标签页获取页面焦点
-                                    // setParent :true:新标签页面关闭后，焦点重新回到源页面
-                                    GM_openInTab(url, { active: false, setParent :true});
-                                }, open_time * 1000 * i)
+    // 调用话题接口 传入topic_name 并 打开页面
+    function get_dynamic_and_open(topic_name) {
+        // 构建url
+        var url = "https://api.vc.bilibili.com/topic_svr/v1/topic_svr/fetch_dynamics?topic_name=" + topic_name
+        // 建立所需的对象
+        var httpRequest = new XMLHttpRequest();
+        // 打开连接  将请求参数写在url中 
+        httpRequest.open('GET', url, true);
+        // 发送请求  将请求参数写在URL中
+        httpRequest.send();
+        httpRequest.onerror = function(error) { 
+            console.log("请求话题接口出错！" + error);
+            show_alert("请求话题接口出错！" + error);
+        };
+        httpRequest.ontimeout = function() { 
+            console.log("请求话题接口超时！"); 
+            show_alert("请求话题接口超时！");
+        };
+        // 获取数据后的处理程序
+        httpRequest.onreadystatechange = function () {
+            if (httpRequest.readyState == 4 && httpRequest.status == 200) {
+                // 获取到json字符串
+                var ret = httpRequest.responseText;
+                //console.log(ret);
+                // 转为JSON对象
+                var json = JSON.parse(ret);
+                console.log(json);
+
+                try {
+                    if(json["code"] == 0) {
+                        let data_len = json["data"]["cards"].length
+                        // 临时存储动态
+                        let temp_dynamic_id = []
+                        let dynamic_id_len = api_dynamic_id_json["dynamic_id"].length
+                        console.log("dynamic_id_len=" + dynamic_id_len)
+                        // 遍历数据
+                        for(let i = 0; i < data_len; i++) {
+                            // 如果没有数据
+                            if(dynamic_id_len == 0) {
+                                if(json["data"]["cards"][i]["desc"]["orig_dy_id_str"] != "0") {
+                                    temp_dynamic_id.push(json["data"]["cards"][i]["desc"]["orig_dy_id_str"])
+                                } else {
+                                    temp_dynamic_id.push(json["data"]["cards"][i]["desc"]["dynamic_id_str"])
+                                }
+                                continue
                             }
-                        } else {
-                            console.log("话题接口返回数据有误")
-                            show_alert("话题接口返回数据有误")
+
+                            // 遍历已加载过的动态id
+                            for(let j = 0; j < dynamic_id_len; j++) {
+                                // 判断此dynamic_id是否已经打开过
+                                if(json["data"]["cards"][i]["desc"]["dynamic_id_str"] == api_dynamic_id_json["dynamic_id"][j] || 
+                                    json["data"]["cards"][i]["desc"]["orig_dy_id_str"] == api_dynamic_id_json["dynamic_id"][j]) {
+                                    break;
+                                }
+                                
+                                // 如果到最后都没有打开过，则表示没有加载过，记录数据
+                                if(j == (dynamic_id_len - 1)) {
+                                    if(json["data"]["cards"][i]["desc"]["orig_dy_id_str"] != "0") {
+                                        temp_dynamic_id.push(json["data"]["cards"][i]["desc"]["orig_dy_id_str"])
+                                    } else {
+                                        temp_dynamic_id.push(json["data"]["cards"][i]["desc"]["dynamic_id_str"])
+                                    }
+                                }
+                            }
                         }
-                    } catch {
+
+                        console.log("新发布的未参与的互动抽奖数=" + temp_dynamic_id.length);
+                        show_alert("新发布的未参与的互动抽奖数=" + temp_dynamic_id.length);
+                        // 依次写入id并打开链接
+                        for(let i = 0; i < temp_dynamic_id.length; i++) {
+                            // 打开链接
+                            setTimeout(function(){
+                                api_dynamic_id_json["dynamic_id"][dynamic_id_len + i] = temp_dynamic_id[i]
+                                var url = "https://t.bilibili.com/" + temp_dynamic_id[i]
+                                console.log("i:" + i + " 跳转：" + url)
+                                // window.open(url)
+                                // active:true，新标签页获取页面焦点
+                                // setParent :true:新标签页面关闭后，焦点重新回到源页面
+                                GM_openInTab(url, { active: false, setParent :true});
+                                // 存储数据
+                                GM_setValue("api_dynamic_id_json", JSON.stringify(api_dynamic_id_json))
+                            }, open_time * 1000 * i)
+                        }
+                    } else {
                         console.log("话题接口返回数据有误")
                         show_alert("话题接口返回数据有误")
                     }
+                } catch(err) {
+                    console.log("话题接口返回数据有误\n" + err)
+                    show_alert("话题接口返回数据有误")
                 }
-            };
-        }
-
-        // 调接口获取动态
-        function go2() {
-            // 设置配置项
-            set_config()
-
-            // 先运行一次
-            get_dynamic_and_open("434405")
-            // 默认每30分钟执行一次
-            interval1 = setInterval(function(){get_dynamic_and_open("434405")}, interval_time * 60 * 1000)
-        }
+            }
+        };
     }
 
+    // 获取cookie
+    function getCookie(cookie_name) {
+        var allcookies = document.cookie;
+        //索引长度，开始索引的位置
+        var cookie_pos = allcookies.indexOf(cookie_name);
+
+        // 如果找到了索引，就代表cookie存在,否则不存在
+        if (cookie_pos != -1) {
+            // 把cookie_pos放在值的开始，只要给值加1即可
+            //计算取cookie值得开始索引，加的1为“=”
+            cookie_pos = cookie_pos + cookie_name.length + 1; 
+            //计算取cookie值得结束索引
+            var cookie_end = allcookies.indexOf(";", cookie_pos);
+            
+            if (cookie_end == -1) {
+                cookie_end = allcookies.length;
+
+            }
+            //得到想要的cookie的值
+            var value = unescape(allcookies.substring(cookie_pos, cookie_end)); 
+        }
+        return value;
+    }
+
+    // 创建关注分组“抽奖关注”
+    function create_follow_group(tag) {
+        // 构建url
+        var url = "https://api.bilibili.com/x/relation/tag/create?tag=" + tag + "&jsonp=jsonp&csrf=" + getCookie("bili_jct")
+        // 建立所需的对象
+        var httpRequest = new XMLHttpRequest();
+        // 打开连接  将请求参数写在url中 
+        httpRequest.open('POST', url, true);
+        httpRequest.withCredentials = true;
+        // 发送请求  将请求参数写在URL中
+        httpRequest.send();
+        httpRequest.onerror = function(error) { 
+            console.log("请求创建关注分组接口出错！" + error); 
+            show_alert("请求创建关注分组出错！" + error);
+        };
+        httpRequest.ontimeout = function() { 
+            console.log("请求创建关注分组接口超时！"); 
+            show_alert("请求创建关注分组接口超时！"); 
+        };
+        // 获取数据后的处理程序
+        httpRequest.onreadystatechange = function () {
+            if (httpRequest.readyState == 4 && httpRequest.status == 200) {
+                // 获取到json字符串
+                var ret = httpRequest.responseText;
+                //console.log(ret);
+                // 转为JSON对象
+                var json = JSON.parse(ret);
+                console.log(json);
+
+                try {
+                    if(json["code"] == 0) {
+                        // 获取下配置数据
+                        var data_json = JSON.parse(GM_getValue("data_json"));
+                        data_json["follow_tagid"] = json["data"]["tagid"];
+                        // 存储数据
+                        GM_setValue("data_json", JSON.stringify(data_json))
+
+                        console.log("创建 " + tag + " 关注分组 成功")
+                        show_alert("创建 " + tag + " 关注分组 成功")
+                    } else if(json["code"] == 22106) {
+                        console.log(tag + " 该分组已经存在")
+                        show_alert(tag + " 该分组已经存在")
+                    } else {
+                        console.log("创建 " + tag + " 关注分组 失败")
+                        show_alert("创建 " + tag + " 关注分组 失败")
+                    }
+                } catch {
+                    console.log("创建 " + uid + " 关注分组 失败")
+                    show_alert("创建 " + uid + " 关注分组 失败")
+                }
+            }
+        };
+    }
+    
+    // 是否在专栏页面
+    if(window.location.href.startsWith("https://www.bilibili.com/read/cv")) {
+        setTimeout(() => {
+            // 删除无用内容
+            function remove_useless() {
+                document.getElementById("bili-header-container").remove()
+                document.getElementsByClassName("article-breadcrumb")[0].remove()
+                document.getElementById("readRecommendInfo").remove()
+                document.getElementById("comment-wrapper").remove()
+                document.getElementsByClassName("interaction-info")[0].remove()
+                show_alert("删除无用内容完毕~")
+            }
+            
+            // 在页面左侧插入一个配置使用框
+            init_config_div()
+        }, 1000); 
+    } 
     // 动态页面
     if(window.location.href.startsWith("https://t.bilibili.com/")) {
         var data_json = JSON.parse(GM_getValue("data_json"));
@@ -780,32 +1192,60 @@
             document.getElementsByClassName("bili-backtop")[0].remove()
             document.getElementsByClassName("bili-dyn-item__avatar")[0].remove()
             document.getElementsByClassName("bili-dyn-item__header")[0].remove()
-            document.getElementsByClassName("bili-dyn-item__body")[0].remove()
+            // document.getElementsByClassName("bili-dyn-item__body")[0].remove()
             show_alert("删除无用内容完毕~")
         }
 
-        // 获取cookie
-        function getCookie(cookie_name) {
-            var allcookies = document.cookie;
-            //索引长度，开始索引的位置
-            var cookie_pos = allcookies.indexOf(cookie_name);
-    
-            // 如果找到了索引，就代表cookie存在,否则不存在
-            if (cookie_pos != -1) {
-                // 把cookie_pos放在值的开始，只要给值加1即可
-                //计算取cookie值得开始索引，加的1为“=”
-                cookie_pos = cookie_pos + cookie_name.length + 1; 
-                //计算取cookie值得结束索引
-                var cookie_end = allcookies.indexOf(";", cookie_pos);
-                
-                if (cookie_end == -1) {
-                    cookie_end = allcookies.length;
-    
+        // 移动关注用户到“抽奖”分组
+        function add_user_to_group(uid) {
+            // 构建url
+            var url = "https://api.bilibili.com/x/relation/tags/addUsers?cross_domain=true&fids=" + 
+                uid + "&tagids=" + data_json["follow_tagid"] + "&csrf=" + getCookie("bili_jct")
+            // 建立所需的对象
+            var httpRequest = new XMLHttpRequest();
+            // 打开连接  将请求参数写在url中 
+            httpRequest.open('POST', url, true);
+            httpRequest.withCredentials = true
+            // 发送请求  将请求参数写在URL中
+            httpRequest.send();
+            httpRequest.onerror = function(error) { 
+                console.log("请求 关注分组 接口出错！" + error); 
+                show_alert("请求 关注分组 接口出错！" + error);
+                all_success = false;
+            };
+            httpRequest.ontimeout = function() { 
+                console.log("请求 关注分组 接口超时！"); 
+                show_alert("请求 关注分组 接口超时！"); 
+                all_success = false;
+            };
+            // 获取数据后的处理程序
+            httpRequest.onreadystatechange = function () {
+                if (httpRequest.readyState == 4 && httpRequest.status == 200) {
+                    // 获取到json字符串
+                    var ret = httpRequest.responseText;
+                    //console.log(ret);
+                    // 转为JSON对象
+                    var json = JSON.parse(ret);
+                    console.log(json);
+
+                    try {
+                        if(json["code"] == 0) {
+                            console.log("关注分组 " + uid + " 成功")
+                            show_alert("关注分组 " + uid + " 成功")
+                        } else {
+                            console.log("关注分组 " + uid + " 失败")
+                            show_alert("关注分组 " + uid + " 失败")
+                            all_success = false;
+                            return
+                        }
+                    } catch {
+                        console.log("关注分组 " + uid + " 失败")
+                        show_alert("关注分组 " + uid + " 失败")
+                        all_success = false;
+                        return
+                    }
                 }
-                //得到想要的cookie的值
-                var value = unescape(allcookies.substring(cookie_pos, cookie_end)); 
-            }
-            return value;
+            };
         }
 
         // 关注用户
@@ -843,6 +1283,9 @@
                         if(json["code"] == 0) {
                             console.log("关注 " + uid + " 成功")
                             show_alert("关注 " + uid + " 成功")
+
+                            // 关注分组
+                            add_user_to_group(uid)
                         } else {
                             console.log("关注 " + uid + " 失败")
                             show_alert("关注 " + uid + " 失败")
@@ -859,7 +1302,7 @@
             };
         }
 
-        // 取关用户
+        // 取关用户 动态页面 直接调用接口取关
         function unfollow(uid) {
             // 构建url
             var url = "https://api.bilibili.com/x/relation/modify?act=2&fid=" + uid + "&spmid=444.42&re_src=0&csrf=" + getCookie("bili_jct")
@@ -1108,6 +1551,10 @@
 
         // 转发 传入转发的评论内容
         function forward(forward_comment_content) {
+            // 转发框 原数据
+            var ori_content = document.getElementsByClassName("bili-rich-textarea__inner")[0].innerText
+            if(ori_content.length > 2) forward_comment_content += ori_content.slice(0, ori_content.length-1)
+
             // 构建url
             var url = "https://api.vc.bilibili.com/dynamic_repost/v1/dynamic_repost/repost"
             // 建立所需的对象
@@ -1437,13 +1884,17 @@
                 setTimeout(function(){document.getElementsByClassName("bili-dyn-forward-publishing__action__btn")[0].click()}, operation_interval*12 + common_append_time + random_num(common_random_time))
             }
         }
-        // 只有所有操作都成功 才会关闭页面
-        if(all_success == true) {
-            // 关闭页面
-            setTimeout(function(){window.close();}, operation_interval*13 + common_append_time + random_num(common_random_time))
-        }
-    }
 
+        // 关闭页面
+        setTimeout(function(){window.close();}, operation_interval*13 + common_append_time + random_num(common_random_time))
+    } 
+    // 关注页面
+    if(window.location.href.startsWith("https://space.bilibili.com")) {
+        if(window.location.href.indexOf("/fans/follow") != -1) {
+            // 在页面左侧插入一个配置使用框
+            init_config_div()
+        }
+    } 
     // 是否在消息页面
     if(window.location.href.startsWith("https://message.bilibili.com/")) {
         // 删除无用内容
@@ -1454,6 +1905,31 @@
         // 在页面左侧插入一个配置使用框
         init_config_div()
     }
+
+    setTimeout(function(){
+        console.log(window.location.href)
+        // 404页面
+        if(window.location.href == "https://www.bilibili.com/404") {
+            console.log("404页面，关了关了")
+            show_alert("404页面，关了关了")
+            // 关闭页面
+            setTimeout(function(){
+                window.location.replace('about:blank');
+                // 关闭页面
+                window.close();
+            }, random_num(1000))
+        }
+
+        console.log(document.getElementsByTagName("body")[0])
+        if(document.getElementsByClassName("im-root").length != 0) {
+            console.log("可能位于404页面，即将关闭")
+            window.location.replace('about:blank');
+            window.opener = null;
+            window.open('', '_self');
+            // 关闭页面
+            window.close();
+        }
+    }, 3000)
 
     // 随机一个0-x的整数
     function random_num(x) {
